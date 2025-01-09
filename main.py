@@ -4,7 +4,7 @@ import telegram
 import time
 import threading
 
-# 텔레그렘 관련
+# 텔레그램 관련
 term = int(input("검색 주기 설정 (초 단위) >> "))
 
 def sendTG(type, link, title, views):
@@ -41,12 +41,14 @@ noticeType = ['일반공지', '장학공지', '학사공지']
 
 def notice(a):
     type = noticeType[a]
+    url = noticeURL[a]
+    path = postNumDir[a]
     
     while True:
         with open(postNumDir[a], 'r') as f:
             postNums = f.read().splitlines()
 
-        response = requests.get(noticeURL[a])
+        response = requests.get(url)
         soup = BeautifulSoup(response.text, 'html.parser')
         
         postArea = soup.find('tbody')
@@ -61,7 +63,7 @@ def notice(a):
             if postNum not in postNums: # 파일에 번호가 없을 시
 
                 # 게시글 번호 저장
-                with open(postNumDir[a], "a") as f:
+                with open(path, "a") as f:
                     f.write(postNum + '\n')
 
                 # 게시글 정보 GET
@@ -101,11 +103,10 @@ def printInfo(type, postNum, postName, postWriter, postDate, postViews, postLink
     print(f"조회수 : {postViews}")
     print(f"링크 : {postLink}\n")
 
-threads = [
-            threading.Thread(target=notice, args=(0,)), 
-            threading.Thread(target=notice, args=(1,)),
-            threading.Thread(target=notice, args=(2,))
-            ]
+threads = []
+
+for i in range(len(noticeType)):
+    threads.append(threading.Thread(target=notice, args=(i,)))
 
 for thread in threads:
     thread.start()
