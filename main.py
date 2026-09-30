@@ -1,116 +1,114 @@
+import os
 import requests
 from bs4 import BeautifulSoup
 import telegram
 import time
 import threading
+from dotenv import load_dotenv
 
-# 텔레그램 관련
-term = int(input("검색 주기 설정 (초 단위) >> "))
+# 환경 변수 로드
+load_dotenv()
 
-def sendTG(type, link, title, views):
-    button = [[telegram.InlineKeyboardButton('자세히 보기', url = link)]]
-    reply_markup = telegram.InlineKeyboardMarkup(button)
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-    bot.sendMessage(chat_id='YOUR_CHAT_ID', 
-                    text = f'[{type}] {title}\n\n(조회수:{views})', 
-                    reply_markup = reply_markup)
+if not TOKEN or not CHAT_ID:
+    raise ValueError("TELEGRAM_TOKEN 또는 TELEGRAM_CHAT_ID 환경 변수가 설정되지 않았습니다. .env 파일을 확인해 주세요.")
 
-bot = telegram.Bot(token='YOUR_TELEGRAM_BOT_TOKEN')
+interval = 1800  # 30분 = 1800초
+bot = telegram.Bot(token=TOKEN)
 
-KUT = 'http://www.koreatech.ac.kr'
+BASE_URL = "https://www.koreatech.ac.kr"
 
-noticeURL = [
-    'https://www.koreatech.ac.kr/kor/CMS/NoticeMgr/list.do?mCode=MN230',
-    'https://www.koreatech.ac.kr/kor/CMS/NoticeMgr/scholarList.do?mCode=MN231',
-    'https://www.koreatech.ac.kr/kor/CMS/NoticeMgr/bachelorList.do?mCode=MN233'
-    ]
-
-postNumDir = [
-    '/python-docker/koreatech_notice/postNum_ilban.txt',
-    '/python-docker/koreatech_notice/postNum_scholar.txt',
-    '/python-docker/koreatech_notice/postNum_barchelor.txt'
+URLS = [
+    ('일반공지', 'https://www.koreatech.ac.kr/notice/list.es?mid=a10604010000&board_id=14'),
+    ('장학공지', 'https://www.koreatech.ac.kr/notice/list.es?mid=a10604020000&board_id=15'),
+    ('학사공지', 'https://www.koreatech.ac.kr/notice/list.es?mid=a10604030000&board_id=16')
 ]
 
-# postNumDir = [
-#     './postNum_ilban.txt',
-#     './postNum_scholar.txt',
-#     './postNum_barchelor.txt'
-# ]
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-noticeType = ['일반공지', '장학공지', '학사공지']
+postNumDir = {
+    '일반공지': os.path.join(BASE_DIR, 'postNum_ilban.txt'),
+    '장학공지': os.path.join(BASE_DIR, 'postNum_scholar.txt'),
+    '학사공지': os.path.join(BASE_DIR, 'postNum_barchelor.txt')
+}
 
-def notice(a):
-    type = noticeType[a]
-    url = noticeURL[a]
-    path = postNumDir[a]
-    
+
+def sendTG(type, link, title, views):
+    buttons = [
+        [telegram.InlineKeyboardButton('자세히 보기', url=link)],
+        [telegram.InlineKeyboardButton(f'조회수: {views}', callback_data='noop')]
+    ]
+    reply_markup = telegram.InlineKeyboardMarkup(buttons)
+
+    bot.sendMessage(chat_id=CHAT_ID, 
+                    text=f'[{type}]\n{title}', 
+                    reply_markup=reply_markup)
+
+def notice(noticeType, url):
     while True:
-        with open(postNumDir[a], 'r') as f:
-            postNums = f.read().splitlines()
-
         response = requests.get(url)
         soup = BeautifulSoup(response.text, 'html.parser')
+        board = soup.find('table')
+        board = board.find('tbody')
+        posts = board.find_all('tr')
+
+        for post in posts:
+            category, title, author, views, num, post_url = getInfo(post)
+            if saveInfo(noticeType, num):
+                printInfo(noticeType, category, title, author, views, num, post_url)
+                sendTG(noticeType, post_url, title, views)
         
-        postArea = soup.find('tbody')
-        posts = postArea.find_all('tr')
+        time.sleep(interval)
 
-        for i in posts:
+def saveInfo(noticeType, num):
+    file_path = postNumDir[noticeType]
+    current_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
 
-            # 게시글 번호로 판단
-            postInfo = i.find_all('td', {'class' : 'num'})
-            postNum = postInfo[0].text
-            
-            if postNum not in postNums: # 파일에 번호가 없을 시
+    with open(file_path, 'r+') as file:
+        lines = file.readlines()
+        if any(num in line for line in lines):
+            return False
+        else:
+            file.write(f"{num} - {current_time}\n")
+            return True
+        
+def printInfo(noticeType, category, title, author, views, num, post_url):
+    print(f"유형: {noticeType}")
+    print(f"번호: {num}")
+    print(f"분류: {category}")
+    print(f"제목: {title}")
+    print(f"작성자: {author}")
+    print(f"조회수: {views}")
+    print(f"URL: {post_url}")
+    print("\n")
 
-                # 게시글 번호 저장
-                with open(path, "a") as f:
-                    f.write(postNum + '\n')
+def getInfo(post):
+    category_td = post.find('td', {'aria-label': '분류'}) or ""  # 학사는 카테고리 분류가 없다.
+    title_td = post.find('td', {'aria-label': '제목'}) 
+    author_td = post.find('td', {'aria-label': '작성자'})
+    views_td = post.find('td', {'aria-label': '조회수'})
+    num_td = post.find('td', {'aria-label': '번호'})
+        
+    category = category_td.get_text(strip=True) if category_td else "카테고리 없음"
+    title = title_td.get_text(strip=True)
+    author = author_td.get_text(strip=True)
+    views = views_td.get_text(strip=True)
+    num = num_td.get_text(strip=True)
 
-                # 게시글 정보 GET
-                postLink, postName, postWriter, postDate, postViews = getInfo(i)
-                
-                sendTG(type, postLink, postName, postViews)
-                now = time.localtime()
-                printInfo(type, postNum, postName, postWriter, postDate, postViews, postLink)
+    title_link = title_td.find('a')
+    post_url = BASE_URL + title_link.get('href')
 
-                print("%04d/%02d/%02d %02d:%02d:%02d" % (now.tm_year, now.tm_mon, now.tm_mday, now.tm_hour, now.tm_min, now.tm_sec), "\n")
-
-                print('\n')
-
-            else:   # 파일에 번호가 있을 때
-                print("이미 존재 합니다")
-                continue
-            
-        time.sleep(term)
-
-def getInfo(i):
-    postLink = KUT + i.find('a')['href']
-
-    postName = i.find('span')['title']
-    postWriter = i.find('td', {'class' : 'writer'}).text
-    postDate = i.find('td', {'class' : 'date'}).text
-    postViews = i.find('td', {'class' : 'cnt'}).text
-
-    return postLink, postName, postWriter, postDate, postViews
-                
-def printInfo(type, postNum, postName, postWriter, postDate, postViews, postLink):
-    print("-- 새 게시글 --\n")
-    print(f"공지 분류 : {type}\n")
-    print(f"게시글 번호 : {postNum}\n")
-    print(f"게시글 이름 : {postName}")
-    print(f"작성자 : {postWriter}")
-    print(f"작성일자 : {postDate}")
-    print(f"조회수 : {postViews}")
-    print(f"링크 : {postLink}\n")
+    return category, title, author, views, num, post_url
 
 threads = []
 
-for i in range(len(noticeType)):
-    threads.append(threading.Thread(target=notice, args=(i,)))
+for noticeType, url in URLS:
+    threads.append(threading.Thread(target=notice, args=(noticeType, url)))
 
 for thread in threads:
     thread.start()
 
-# # Wait for all threads to finish
-# for thread in threads:
-#     thread.join()
+for thread in threads:
+    thread.join()

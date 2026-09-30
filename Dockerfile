@@ -1,4 +1,4 @@
-FROM python:3.10.6-slim
+FROM python:3.12.8-slim
 
 WORKDIR /python-docker/koreatech_notice/
 
